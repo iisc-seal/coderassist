@@ -1,0 +1,32 @@
+package feedback;
+import java.sql.*;
+
+public class AggregateResult{
+	ResultStats input;
+	ResultStats init;
+	ResultStats update;
+	ResultStats output;
+	
+	@Override
+	public String toString() {
+		return "AggregateResult [input=" + input + ", init=" + init
+				+ ", update=" + update + ", output=" + output + "]";
+	}
+
+	public void writeAggregateResult(Connection connection, int subId, String ref) 
+			throws SQLException{
+<<<<<<< HEAD
+//		input.writeSelf(connection, subId, ref, "ResultsDatabase.input_results");
+		init.writeSelf(connection, subId, ref, "ResultsDatabase.init_results");
+		update.writeSelf(connection, subId, ref, "ResultsDatabase.update_results");
+		output.writeSelf(connection, subId, ref, "ResultsDatabase.output_results");
+	}
+	
+=======
+		input.writeSelf(connection, subId, ref, MainDriver.databaseName + ".input_results");
+		init.writeSelf(connection, subId, ref, MainDriver.databaseName + ".init_results");
+		update.writeSelf(connection, subId, ref, MainDriver.databaseName + ".update_results");
+		output.writeSelf(connection, subId, ref, MainDriver.databaseName + ".output_results");
+	}	
+>>>>>>> 7a4502c385948c225494162a3818f9b2eb649b65
+}

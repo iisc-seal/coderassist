@@ -1,0 +1,387 @@
+package feedback;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Scanner;
+import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
+
+import java.sql.PreparedStatement;
+
+import feedback.init.InitSummary;
+import feedback.inputs.ProgramInputs;
+import feedback.logging.Logger;
+import feedback.output.OutputSummary;
+import feedback.update.UpdateSummary;
+import feedback.utils.TypeSummary;
+
+public class MainDriver {
+	static Logger ErrorLogger, MatchLogger, NoMatchLogger;
+	static Logger SpuriousGlobalInitLogger, OutputLogger;
+	static Set<String> subsToSkip = new HashSet<String>();
+	static Connection connection;
+	static PreparedStatement preparedStatementForMain;
+	static PreparedStatement preparedStatementForInput;
+	static PreparedStatement preparedStatementForInit;
+	static PreparedStatement preparedStatementForUpdate;
+	static PreparedStatement preparedStatementForOutput;
+	static String databaseName;
+	public static void main(String[] args) {
+		
+		long startTime = System.nanoTime();
+		
+		if (args.length != 4) {
+			System.out.println("ERROR: Invalid number of arguments\n");
+			System.out.println("Input refsFile, subsFile, skipFile and path to store logs\n");
+			return;
+		}
+		
+		String refsFile = args[0];
+		String subsFile = args[1];
+		String skipFile = args[2];
+		String logFilePath = args[3];
+				
+		Scanner refsScanner = getScannerForPath(refsFile);
+		Scanner subsScanner = getScannerForPath(subsFile);
+		Scanner skipScanner = getScannerForPath(skipFile);
+		
+		if(refsScanner == null || subsScanner == null || skipScanner == null){
+			System.out.println("Incorrect paths in command line");
+			return;
+		}
+					
+		setUpLoggers(logFilePath);
+		populateSubmissionsToSkip(skipScanner);
+		
+		
+		List<SummaryModule> refList = new ArrayList<SummaryModule>();
+		
+		
+		ProgramInputs Inps = new ProgramInputs();
+		databaseName = Inps.readInputConstraints(args[0]);
+		System.out.println(databaseName);
+		createConnection();
+		// Read in reference implementations into a list
+		readReferences(refList, refsScanner, Inps);
+		
+		
+		Map<String, List<FeedbackSummary> > subToFS = 
+				new HashMap<String, List<FeedbackSummary> >();
+		
+		Map<String, ResultSummary> subToRs = new HashMap<String, ResultSummary>();
+		
+		while (subsScanner.hasNext()) {
+			
+			SortedMap<String, AggregateResult> subToAS = new TreeMap<String, AggregateResult>();
+			String currentSub = subsScanner.next();
+			
+			if (subsToSkip.contains(currentSub))
+				continue;
+			System.out.println("Processing -> "+ currentSub);
+			
+			for(SummaryModule referenceSummary: refList){
+				System.out.println("Matching against "+referenceSummary.getName());
+				FeedbackSummary feedSummary = new FeedbackSummary(currentSub, 
+						referenceSummary, Inps, ErrorLogger);
+				AggregateResult submissionResult = feedSummary.processSubmission();
+				
+				if(subToFS.containsKey(currentSub)){
+					subToFS.get(currentSub).add(feedSummary);
+				}
+				else{
+					ArrayList<FeedbackSummary> l = new ArrayList<FeedbackSummary>();
+					l.add(feedSummary);
+					subToFS.put(currentSub, l);
+				}
+//				if(perfectMatch)
+//					break;
+				subToAS.put(referenceSummary.getName(), submissionResult);
+				System.gc();
+			}
+			ResultSummary rs = new ResultSummary(subToAS);
+			subToRs.put(currentSub, rs);
+			List<FeedbackSummary> curFeedback = subToFS.get(currentSub);
+			int bestScore = Integer.MAX_VALUE;
+			FeedbackSummary best = null;
+			for(FeedbackSummary fSum: curFeedback){
+				if(fSum.getScore() < bestScore){
+					best = fSum;
+					bestScore = fSum.getScore();
+				}
+			}
+			System.out.println(best.feedback());			
+		}
+		
+
+		int matched = 0, failed = 0;
+		for(Entry<String, ResultSummary> entry : subToRs.entrySet()){
+			String name = entry.getKey();
+			ResultSummary rs = entry.getValue();
+			if(rs.succeeded){
+				matched++;
+				System.out.println("Generated feedback for " + name);
+				System.out.println(rs.matches);
+			}
+			else{
+				System.out.println("Failed to generate feedback for " + name);
+				for(Entry<String, AggregateResult> e : rs.aggregateSummary.entrySet()){
+					System.out.println(e.getKey());
+					AggregateResult value = e.getValue();
+					System.out.println("Init:" + value.init.reasonForFailure);
+					System.out.println("Update:" + value.update.reasonForFailure);
+					System.out.println("Output:" + value.output.reasonForFailure);
+				}
+				failed++;
+			}
+		}
+		
+		try {
+			preparedStatementForMain.executeBatch();
+<<<<<<< HEAD
+		    preparedStatementForInput.executeBatch();
+=======
+			preparedStatementForInput.executeBatch();
+>>>>>>> 7b6b56779f578a18d5d8f0f4f201a5d3638695bc
+			preparedStatementForInit.executeBatch();
+			preparedStatementForUpdate.executeBatch();
+			preparedStatementForOutput.executeBatch();
+			connection.commit();
+		} catch (SQLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
+		cleanLoggers();
+		
+		// Finding elapsed time
+		long endTime = System.nanoTime();
+		
+		long difference = (endTime - startTime) / 1000000; // in milliseconds
+		
+		long elapsed_secs = difference / 1000;
+		
+		if (elapsed_secs == 0) {
+			System.out.println("Total time: " + difference + " ms");
+		} else {
+			long hrs = elapsed_secs / 3600;
+			long remaining = elapsed_secs % 3600;
+			
+			long mins = remaining / 60;
+			remaining = remaining % 60;
+			
+			long secs = remaining;
+			
+			if (hrs == 0) 
+				if (mins == 0)
+					System.out.println("Total time: " + secs + "s");
+				else
+					System.out.println("Total time: " + mins + "m " + secs + "s");
+			else
+				System.out.println("Total time: " + hrs +"h " + mins + "m " + secs + "s");
+		}
+		System.out.println("Matched: " + matched);
+		System.out.println("Failed: " + failed);
+		try {
+			preparedStatementForMain.close();
+			preparedStatementForInput.close();
+			preparedStatementForInit.close();
+			preparedStatementForUpdate.close();
+			preparedStatementForOutput.close();
+			connection.close();			
+		} catch (SQLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}		
+	}
+
+	private static void readReferences(List<SummaryModule> refList,
+			Scanner scr, ProgramInputs Inps) {
+		while (scr.hasNext()) {
+			String fileName = scr.next();
+			
+			// Read in the reference type summary
+			TypeSummary typeSum = new TypeSummary(fileName, fileName+".typemap");
+			typeSum.parse();
+			
+			UpdateSummary inputSum = new UpdateSummary(fileName, fileName + ".input.summary", ErrorLogger);
+			boolean ret = inputSum.parse();
+			if (!ret) {
+				System.out.println("Failed to parse reference "+ inputSum.progUpdateSummaryName);
+				cleanLoggers();
+				continue;
+			}
+			inputSum.prepareReference();
+			
+			InitSummary initSum = new InitSummary(fileName, ErrorLogger, Inps);
+			ret = initSum.parse();
+			if (!ret) {
+				System.out.println("Failed to parse reference "+ initSum.progInitSummaryName);
+				cleanLoggers();
+				continue;
+			}
+			initSum.prepareReference();
+			// Read in the reference update summary
+			UpdateSummary updateSum = new UpdateSummary(fileName, fileName + ".update.summary", ErrorLogger);
+			System.out.println("DEBUG: File " + updateSum.getProgUpdateSummaryName());
+			ret = updateSum.parse();
+			if (!ret) {
+				System.out.println("Failed to parse "+ updateSum.getProgUpdateSummaryName());
+				cleanLoggers();
+				System.out.println("Failed to parse reference "+ fileName);
+				continue;
+			}
+			updateSum.prepareReference();
+
+			
+			// Read in the reference output summary
+			OutputSummary opSum = new OutputSummary(fileName, fileName + ".output.summary", ErrorLogger);
+			ret = opSum.parse();
+			if (!ret) {
+				System.out.println("Failed to parse "+ opSum.getProgOutputSummaryName());
+				cleanLoggers();
+				continue;
+			}
+			opSum.prepareReference();
+			
+			refList.add(new SummaryModule(typeSum, inputSum, initSum, updateSum, opSum, fileName));
+		}
+	}
+
+	private static void cleanLoggers() {
+		ErrorLogger.closeLog();
+		MatchLogger.closeLog();
+		NoMatchLogger.closeLog();
+		SpuriousGlobalInitLogger.closeLog();
+		OutputLogger.closeLog();
+	}
+
+	private static void populateSubmissionsToSkip(Scanner scr){	
+		while(scr.hasNext()){
+			String skip = scr.next();
+			subsToSkip.add(skip.replace("\n", ""));
+		}
+	}
+
+	private static void setUpLoggers(String logFilePath) {
+		ErrorLogger = new Logger(logFilePath + "curr.error.log");
+		MatchLogger = new Logger(logFilePath + "curr.match.log");
+		NoMatchLogger = new Logger(logFilePath + "curr.nomatch.log");
+		SpuriousGlobalInitLogger = new Logger(logFilePath + "curr.spurious.global.init.log");
+		OutputLogger = new Logger(logFilePath + "curr.output.log");
+	}
+	
+	private static Scanner getScannerForPath(String s){
+		Scanner scr;
+		try{
+			scr = new Scanner(new File(s));
+		} catch(FileNotFoundException e){
+			System.out.println("ERROR: Cannot find file " + s);
+			return null;
+		}
+		return scr;
+	}
+	
+	private static Connection createConnection(){
+//		Connection connection = null;
+		try {
+		     
+		      Class.forName("com.mysql.jdbc.Driver");
+		      connection = DriverManager
+		          .getConnection("jdbc:mysql://localhost/" + databaseName + "?" +
+		          		"useServerPrepStmts=false&rewriteBatchedStatements=true&"
+		              + "user=dpassist&password=dpassist@mysql");
+		      connection.setAutoCommit(false);
+//		      connection.setTransactionIsolation(java.sql.Connection.TRANSACTION_READ_COMMITTED);
+		      createPreparedStatementForMain();
+<<<<<<< HEAD
+			  createPreparedStatementForInput(); 
+=======
+		      createPreparedStatementForInput();
+>>>>>>> 7b6b56779f578a18d5d8f0f4f201a5d3638695bc
+		      createPreparedStatementForInit();
+		      createPreparedStatementForUpdate();
+		      createPreparedStatementForOutput();
+		}	catch (SQLException ex) {
+		    System.out.println("SQLException: " + ex.getMessage());
+		    System.out.println("SQLState: " + ex.getSQLState());
+		    System.out.println("VendorError: " + ex.getErrorCode());
+		} catch (ClassNotFoundException e) {
+			e.printStackTrace();
+		}			
+		return connection;
+	}
+	
+	private static void createPreparedStatementForMain(){
+		String table = databaseName + ".results_table";
+		
+		String query = "INSERT INTO "+ table + 
+				" VALUES(?, ?, ?, ?, ?)" +
+				" ON DUPLICATE KEY UPDATE " +
+				"`SubmissionId`=values(SubmissionId), " +
+				"`ReferenceName`=values(ReferenceName), " +
+				"`CodechefStatus`=values(CodechefStatus), " +
+				"`Score`=values(Score), " +
+				"`ProcessingTime`=values(ProcessingTime);";
+
+		try {
+			preparedStatementForMain = connection.prepareStatement(query);
+		} catch (SQLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+	
+	private static void createPreparedStatementForInput(){
+		String query = "REPLACE INTO "+ databaseName +
+				".input_results VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?);";
+		try {
+			preparedStatementForInput = connection.prepareStatement(query);
+		} catch (SQLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+	
+	private static void createPreparedStatementForInit(){
+		String query = "REPLACE INTO "+ databaseName +
+				".init_results VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?);";
+		try {
+			preparedStatementForInit = connection.prepareStatement(query);
+		} catch (SQLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+	
+	private static void createPreparedStatementForUpdate(){
+		String query = "REPLACE INTO "+ databaseName +
+				".update_results VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?);";
+		try {
+			preparedStatementForUpdate = connection.prepareStatement(query);
+		} catch (SQLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+	
+	private static void createPreparedStatementForOutput(){
+		String query = "REPLACE INTO "+ databaseName +
+				".output_results VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?);";
+		try {
+			preparedStatementForOutput = connection.prepareStatement(query);
+		} catch (SQLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}	
+}

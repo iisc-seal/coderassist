@@ -1,0 +1,132 @@
+tree grammar InitTreeWalker;
+
+options {
+  language = Java;
+  tokenVocab = initParse;
+  ASTLabelType = CommonTree;  
+}
+
+@header {
+  package feedback.init.parser;
+  import feedback.utils.Expression;
+  import feedback.utils.AssignmentStatement;
+  import feedback.utils.LoopStatement;
+  import feedback.init.BlockStatement;
+  import feedback.utils.Statement;
+  import feedback.utils.Assignment;
+  import feedback.utils.Expression.ExprType;
+  import java.util.Map;
+  import java.util.HashMap;
+  import java.util.TreeMap;
+  import java.util.ArrayList;
+  import java.util.List;
+  import java.util.Set;
+  import java.util.HashSet;
+}
+
+@members {
+  private Map<String, Integer> variables = new HashMap<String, Integer>();
+  List<Statement> stmts = new ArrayList<Statement>();
+  @Override
+  protected Object recoverFromMismatchedToken(IntStream input, int ttype, BitSet follow) throws RecognitionException {
+    throw new MismatchedTokenException(ttype, input);
+  }
+
+  @Override
+  public Object recoverFromMismatchedSet(IntStream input, RecognitionException e, BitSet follow) throws RecognitionException {
+    throw e;
+  }
+  
+}
+
+@rulecatch {
+    catch (RecognitionException e) {
+        throw e;
+    }
+}
+
+prog returns [List<Statement> lst]
+  : b=block {lst = b;} 
+  ;
+
+block returns [List<Statement> lst]
+  @init{lst = new ArrayList<Statement>(); }
+  : ^(BLOCK ^(STATEMENT (s = statement {stmts.add(s); lst.add(s); })* )) 
+  ;
+
+statement returns [Statement stmt]
+  : lStmt=loopStatement {stmt = lStmt;} 
+  | aStmt=assignmentStatement {System.out.println("Matched aStmt "+aStmt); stmt = aStmt;}  
+  ;
+
+loopStatement returns [LoopStatement lStmt]
+  : ^(LOOP lowerBound=expression step=expression upperBound=expression sList=block) {lStmt = new LoopStatement(lowerBound, step, upperBound, sList);}
+  ;
+
+assignmentStatement returns [AssignmentStatement aStmt]
+  : ^(GUARD exp=expression? assign=assignment) {aStmt = new AssignmentStatement(exp, assign.getLHS(), assign.getRHS());}
+  ;
+  
+assignment returns [Assignment assign]
+  : ^(ASSIGNMENT Identifier (eList=indexes)? rhs=expression) {
+    Expression lhs = new Expression(ExprType.ARRAY,  eList, $Identifier.text);
+    assign = new Assignment(lhs, rhs); 
+  }
+  ;
+  
+functionCall returns [Expression expr]
+  :  ^(FUNC_CALL Identifier eList=exprList?) {expr = new Expression(ExprType.FN, eList, $Identifier.text);}
+  ;
+
+exprList returns [List<Expression> lst]
+      @init{lst = new ArrayList<Expression>(); }
+  :  ^(EXP_LIST (exp=expression {lst.add(exp);})+)
+  ;
+
+expression returns [Expression expr]
+  :  ^(TERNARY e1=expression e2=expression e3=expression) {expr = new Expression(ExprType.TERNARY, "?", e1, e2, e3, "");}
+  |  ^('||'  e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "||" , e1, e2, "");}
+  |  ^('&&'  e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "&&" , e1, e2, "");}
+  |  ^('=='  e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "==" , e1, e2, "");}
+  |  ^('!='  e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "!=" , e1, e2, "");}
+  |  ^('>='  e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, ">=" , e1, e2, "");}
+  |  ^('<='  e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "<=" , e1, e2, "");}
+  |  ^('>'   e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, ">"  , e1, e2, "");}
+  |  ^('<'   e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "<" ,  e1, e2, "");}
+  |  ^('...' e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "...",  e1, e2, "");}
+  |  ^('+'   e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "+" ,  e1, e2, "");}
+  |  ^('-'   e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "-" ,  e1, e2, "");}
+  |  ^('*'   e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "*" ,  e1, e2, "");}
+  |  ^('/'   e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "/" ,  e1, e2, "");}
+  |  ^('%'   e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "\%" , e1, e2, "");}
+  |  ^('^'   e1=expression e2=expression) {expr = new Expression(ExprType.BINARY, "^" ,  e1, e2, "");}
+  |  ^(UNARY_MIN e1=expression) {expr = new Expression(ExprType.UNARY, "-" , e1, "");}
+  |  ^(NEGATE e1=expression) {expr = new Expression(ExprType.UNARY, "!" , e1, "");}
+  |  Number {expr = new Expression(ExprType.CONST, "" , $Number.text);}
+  |  Bool {expr = new Expression(ExprType.CONST, "" , $Bool.text);}
+  |  Null {expr = new Expression(ExprType.CONST, "" , $Null.text);}
+  |  e1=functionCall {expr = e1;}
+  |  e1=lookup {expr = e1;}           
+  ;
+
+//list
+//  :  ^(LIST exprList?)
+//  ;
+
+lookup returns [Expression expr]
+//:  ^(LOOKUP functionCall indexes?)
+//|  ^(LOOKUP list indexes?)
+//|  ^(LOOKUP expression indexes?) 
+  :  ^(LOOKUP Identifier (eList=indexes)?) {
+        if (eList==null) 
+          expr = new Expression(ExprType.ID, "", $Identifier.text);
+        else
+          expr = new Expression(ExprType.ARRAY, eList, $Identifier.text);
+     }
+//|  ^(LOOKUP String indexes?)
+  ;
+
+indexes returns [List<Expression> lst]
+      @init{lst = new ArrayList<Expression>(); }
+  :  ^(INDEXES (exp=expression {lst.add(exp);})+) 
+  ;

@@ -1,0 +1,224 @@
+package feedback;
+
+import feedback.init.InitSummary;
+import feedback.inputs.ProgramInputs;
+import feedback.logging.Logger;
+import feedback.output.OutputSummary;
+import feedback.update.UpdateSummary;
+import feedback.utils.Expression;
+import feedback.utils.HelperFunctions;
+import feedback.utils.TypeSummary;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+
+public class FeedbackSummary {
+	// the reference this was generated against
+	String referenceName;
+	
+	// the summary this was generated for
+	String programName;
+	
+	// A data structure representing constraints on the program inputs
+	ProgramInputs inputs;
+
+	// The reference we're trying to match this against
+	SummaryModule ref;
+	
+	// Summaries for init, update and output
+	private InitSummary initSummary;
+
+	private UpdateSummary updateSummary;
+
+	private OutputSummary outputSummary;
+	
+	// the feedback logger object associated with this submission
+	private Logger feedbackLogger;
+	
+	// the error logger object associated with this submission
+	private Logger errorLogger;
+
+	private AggregateResult aggregateResults;
+
+	private Expression precondition;
+
+	private UpdateSummary inputSummary;	
+	/*
+	 * 1. Read in the names of the reference and submission
+	 * 2. Set up the SummaryModule for the submission using the reference
+	 * 3. Generate feedback
+	 */
+	FeedbackSummary(String progName, SummaryModule ref, ProgramInputs I, 
+			Logger error){
+		this.programName = progName;
+		this.ref = ref;
+		this.inputs = I;
+		this.errorLogger = error;
+		String trunc = progName.replace(".wa.cpp", "").replace(".ac.cpp", "").replace(".wa.c", "").replace(".ac.c", "");		
+		String refName = getReferenceName();
+		feedbackLogger = new Logger(trunc + ".feedback." + refName);
+		precondition = I.getAsConstraint();
+		aggregateResults = new AggregateResult();		
+	}
+
+	private int getSubmissionId(){
+		int index = programName.lastIndexOf('/');
+		String id = programName.substring(index + 1);
+		id = id.replace(".wa.cpp", "").replace(".ac.cpp", "").replace(".wa.c", "").replace(".ac.c", "");
+		return Integer.parseInt(id);
+	}
+
+	private String getReferenceName(){
+		int index = ref.getName().lastIndexOf('/');
+		String refName = ref.getName().substring(index + 1);
+		return refName;
+	}
+	
+	public AggregateResult processSubmission() {	
+		long totalTimeStart = System.nanoTime();
+		
+		feedbackLogger.writeLog("--------------Matching types--------------");
+		String trunc = programName.replace(".wa.cpp", "").replace(".ac.cpp", "").replace(".wa.c", "").replace(".ac.c", "");
+<<<<<<< HEAD
+//		InputSummary inputSum = new InputSummary(programName, trunc + ".typemap");
+//		inputSum.parse();
+//		ref.input.getFeedback(inputSum, feedbackLogger);
+=======
+		TypeSummary typeSum = new TypeSummary(programName, trunc + ".typemap");
+		typeSum.parse();
+		ref.typeSum.getFeedback(typeSum, feedbackLogger);
+		
+		feedbackLogger.setMode(Logger.Modes.INPUT);
+		inputSummary = new UpdateSummary(programName, trunc + ".input.summary", errorLogger);
+		long startTime = System.nanoTime();
+		boolean parsedInput = inputSummary.parse();
+		if(parsedInput){
+			System.out.println("--------------Matching against input--------------");
+			feedbackLogger.writeLog("--------------Matching against input--------------");	
+			aggregateResults.input = HelperFunctions.matchBlocks(ref.input.blocks, inputSummary.blocks, 
+					feedbackLogger, precondition, ref.input.progUpdateSummaryName, 
+					ref.input.progName, inputSummary.progUpdateSummaryName, ref.typeSum.getDeclaredVars());
+			inputSummary.incScore(aggregateResults.update.score);
+		}
+		else{
+			aggregateResults.input = new ResultStats(false, 0, 0, "Failed to parse", 5);
+			inputSummary.incScore(5);
+		}
+		long endTime = System.nanoTime();
+		aggregateResults.input.processingTime = endTime - startTime;
+		aggregateResults.input.feedbackText = feedbackLogger.input.toString();
+		
+		feedbackLogger.setMode(Logger.Modes.INIT);
+>>>>>>> 94ecb5d620825b8f1099485e2d48c34185d8633a
+		System.out.println("--------------Matching against init--------------");
+		feedbackLogger.writeLog("--------------Matching against init--------------");
+		initSummary = new InitSummary(trunc, errorLogger, inputs);
+		startTime = System.nanoTime();
+		boolean parsedInit = initSummary.parse();
+		if(parsedInit){
+			aggregateResults.init = initSummary.compareSummary(ref.init, feedbackLogger);	
+		}
+		else{
+			aggregateResults.init = new ResultStats(false, 0, 0, "Failed to parse", 5);
+			initSummary.score+=5;
+		}
+		endTime = System.nanoTime();
+		aggregateResults.init.processingTime = endTime - startTime;
+		aggregateResults.init.feedbackText = feedbackLogger.init.toString();
+		
+//		initSummary.score = initSummary.fragments.getScore();
+//		}
+		feedbackLogger.setMode(Logger.Modes.UPDATE);
+		updateSummary = new UpdateSummary(programName, trunc + ".update.summary", errorLogger);
+		startTime = System.nanoTime();
+		boolean parsedUpdate = updateSummary.parse();
+		if(parsedUpdate){
+			System.out.println("--------------Matching against update--------------");
+			feedbackLogger.writeLog("--------------Matching against update--------------");
+//			updateSummary.processAsSubmission(ref.update, feedbackLogger);
+			aggregateResults.update = HelperFunctions.matchBlocks(ref.update.blocks, updateSummary.blocks, 
+					feedbackLogger, precondition, ref.update.progUpdateSummaryName, 
+					ref.update.progName, updateSummary.progUpdateSummaryName, ref.typeSum.getDeclaredVars());
+			updateSummary.incScore(aggregateResults.update.score);
+		}
+		else{
+			aggregateResults.update = new ResultStats(false, 0, 0, "Failed to parse", 5);
+			updateSummary.incScore(5);
+		}
+		endTime = System.nanoTime();
+		aggregateResults.update.processingTime = endTime - startTime;
+		aggregateResults.update.feedbackText = feedbackLogger.update.toString();
+		
+		feedbackLogger.setMode(Logger.Modes.OUTPUT);
+		outputSummary = new OutputSummary(programName, trunc + ".output.summary", errorLogger);
+		startTime = System.nanoTime();
+		boolean parsedOutput = outputSummary.parse();
+		if(parsedOutput){
+			System.out.println("--------------Matching against output--------------");
+			feedbackLogger.writeLog("--------------Matching against output--------------");
+			aggregateResults.output = HelperFunctions.matchBlocks(ref.output.blocks, outputSummary.blocks, 
+					feedbackLogger, precondition, ref.output.progOutputSummaryName, 
+					ref.output.progName, outputSummary.progOutputSummaryName, ref.typeSum.getDeclaredVars());
+			outputSummary.incScore(aggregateResults.output.score);
+		}
+		else{
+			aggregateResults.output = new ResultStats(false, 0, 0, "Failed to parse", 5);
+			outputSummary.incScore(5);
+		}
+		endTime = System.nanoTime();
+		aggregateResults.output.processingTime = endTime - startTime;
+		aggregateResults.output.feedbackText = feedbackLogger.output.toString();
+		
+		long totalTimeEnd = System.nanoTime();
+		writeToDatabase(aggregateResults, totalTimeEnd - totalTimeStart);
+		
+		feedbackLogger.writeLog("Total: "+ getScore());
+		feedbackLogger.closeLog();
+		return aggregateResults;
+	}
+	
+		
+	private void writeToDatabase(AggregateResult aggregateResults, Long time){		
+		writeResultTables(time, MainDriver.connection);		
+	}
+
+	private void writeResultTables(Long time, Connection connection) {
+		PreparedStatement preparedStatement = MainDriver.preparedStatementForMain;
+		int submissionId = getSubmissionId();
+		String refName = getReferenceName();
+		
+		try {			 
+			 preparedStatement.setInt(1, submissionId);
+		     preparedStatement.setString(2, refName);
+		     preparedStatement.setString(3, getCodechefStatus());
+		     preparedStatement.setInt(4, getScore());
+		     preparedStatement.setString(5, time.toString());	
+		     preparedStatement.addBatch();
+ 			 aggregateResults.writeAggregateResult(connection, submissionId, refName);
+		} catch (SQLException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();			
+		}
+	}
+
+	private String getCodechefStatus() {
+		if(programName.contains("ac"))
+			return "ac";
+		else
+			return "wa";
+	}
+
+	// get the score obtained on matching against this reference
+	public int getScore(){
+		return initSummary.score + updateSummary.getScore() + outputSummary.getScore();
+	}
+	
+	// return the feedback obtained on matching against this reference
+	public String feedback(){
+		return "";
+	}
+}

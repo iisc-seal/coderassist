@@ -1,0 +1,124 @@
+CoderAssist
+-----------
+
+CoderAssist is an implementation of the feedback generation methodology
+described in our FSE 2016 paper "Semi-Supervised Verified Feedback Generation".
+The approach is to first cluster the input set of programs based on solution
+strategy, next identify a reference implementation from each cluster and then
+compare each program in a cluster with its reference implementation to generate
+verified feedback. For technical details, please go through our paper (mentioned
+above).
+
+The implementation is divided into 3 parts:-
+1. Extracting clustering features from a given program: This implementation is in the
+folder "findfeatures" and is built using Clang's LibTooling. It takes a single program
+as input and extracts the feature values used for clustering.
+2. Clustering the input set of programs: This is a simple script that obtains
+the features identified before and then clusters them based on equality of these
+features. This is implemented as a C++ program and some scripts for interfacing
+with it. This can be found in the folder "cluster-scripts".
+3. Generating feedback for each program: This implementation is in the folder
+"genfeedback" and is built using ANTLR and Java. It takes as input two programs--a
+faulty submission and a reference implementation-- and generates verified
+feedback by comparing them.
+
+In addition to these, we also implemented a preprocessing tool that rewrites a
+program to a format assumed by our findfeatures implementation. This is in the folder
+"transform" and is built using Clang.
+
+Installation
+------------
+This implementation was tested on Ubuntu 14 OS.
+
+Software Requirements:-
+1. LLVM Clang - We used Clang-3.9. Follow the instructions on
+"http://clang.llvm.org/docs/LibASTMatchersTutorial.html" to install Clang's
+Libtooling. But make the following modification:- When you are building clang,
+you call cmake to configure and generate the makefiles. Change this command to
+the following: "cmake -G Ninja ../llvm -DCMAKE_BUILD_TYPE=Release
+-DLLVM_ENABLE_EH=ON -DLLVM_ENABLE_RTTI=ON". This forces LLVM to be built with
+support for exception handling and run time type inference. This is a mandatory
+requirement for our tool. The other option is to force a Release build as
+opposed to a Debug build (which is the default). This is only optional. Debug
+build takes up a lot of memory and there is a good chance your installation gets
+terminated due to lack of memory. We recommend that you use a Release build.
+
+2. GNU C++ - We used g++-4.8.
+
+3. Java - We used Java 1.7.0.
+
+4. ANTLR - We used ANTLR v3. Follow Scott Stanchfield's videos for setting up
+ANTLR in Eclipse.
+
+5. Z3 - Follow instructions on
+"http://leodemoura.github.io/blog/2012/12/10/z3-for-java.html" to install z3 for
+java.
+
+Setup instructions
+------------------
+1. Once you install Clang's Libtooling, copy the folders findfeatures and transform
+into "<path-to-llvm>/llvm/tools/clang/tools/extra/". Rerun ninja. This generates
+an executable "findFeatures" and "transform" in the bin folder of your llvm
+installation.
+
+2. Set up ANTLR in Eclipse. Create a Java Project with the source in "genfeedback"
+folder. Add libz3.so (from Z3 installation) to the build path. Build the
+project.
+
+
+Usage instructions
+------------------
+Before we describe how to use CoderAssist, we would like to mention the naming
+convention we used for the student submissions. We evaluated our implementation
+on submissions from CodeChef. Each submission in CodeChef is assigned an integer
+ID and a status that describes the result, which can be either "accepted" or
+"wrong answer". There are many other status in CodeChef such as "runtime error",
+"time limit exceeded", etc. We only looked at C submissions with "accepted" (ac)
+or "wrong answer" (wa) status. So we named each submission as <id>.<ac or wa>.c.
+All our scripts assume this naming convention. The scripts are used to run each
+part of the implementation over the entire data set. These scripts are
+relatively easy to write and you could modify them to match your dataset.
+
+We also assume that all submissions for a given problem, say SUMTRIAN, are in a
+folder with that name. All our scripts should be run from the parent folder of
+SUMTRIAN.
+
+Some submissions in CodeChef used custom input/output functions. Our
+implementation requires the user to state what these functions are. We created
+two files "inputFunc" and "outputFunc" to record these. You can find the files
+we used in the "scripts" folder. Each line in these folder is of the form
+<id>:<funcname>. In case there are multiple functions then they are separated by
+comma. Populate these files before you run the tool.
+
+The workflow of our tool is as follows: (1) run findFeatures on all
+submissions, (2) identify clusters and their reference implementations, (3) run
+genFeedback for each submission.
+
+To run findFeatures and identify clusters, run "runProblem.sh" in "scripts"
+folder. The arguments to this script are (1) the name of the root folder with
+all submissions (for e.g.  SUMTRIAN) and (2) name of file listing all
+submissions (each line is full path to the submission). This step outputs three
+files:-
+1. filesWithClusterNums.csv - gives the cluster num associated with each
+submission
+2. clusterWithRefs.csv - gives the submission that is identified as the
+reference implementation for each submission
+3. filesWithRefs.txt - lists each submission with the associated reference
+implementation
+
+After this step, you need to look through the reference implementations
+identified and manually validate them. You may fix the identified reference
+implementations themselves. If you have modified any of the references, we
+suggest you run the script "runGetFeaturesPart.sh". To see the arguments to this
+script, look at file "runProblem.sh" in "scripts" folder.
+
+To run genFeedback, open Eclipse project and run MainDriver.java with three
+arguments:-
+1. filesWithRefs.txt - the file generated by the previous step
+2. path-to-root-folder - path to the root folder containing all submissions
+(e.g. SUMTRIAN)
+
+The feedback generated for each submission will be in a file
+<id-for-submission>.feedback.
+
+Contact shalinikaleeswaran@gmail.com for any queries.

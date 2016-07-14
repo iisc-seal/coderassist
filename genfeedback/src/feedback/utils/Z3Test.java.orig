@@ -1,0 +1,97 @@
+package feedback.utils;
+
+import static org.junit.Assert.*;
+
+import org.junit.BeforeClass;
+import org.junit.Test;
+
+import com.microsoft.z3.ApplyResult;
+import com.microsoft.z3.ArithExpr;
+import com.microsoft.z3.BoolExpr;
+import com.microsoft.z3.Context;
+import com.microsoft.z3.Expr;
+import com.microsoft.z3.Goal;
+import com.microsoft.z3.Tactic;
+import com.microsoft.z3.Z3Exception;
+
+public class Z3Test {
+
+	@BeforeClass
+	public static void setUpBeforeClass() throws Exception {
+	}
+
+	private static String getStringRepresentation(ApplyResult apply) {
+		Goal[] subgoals = apply.getSubgoals();
+		int size = subgoals.length; 
+		if(size == 0)
+			return "false";
+		if(size == 1)
+			return getStringRepresentation(subgoals[0]);
+		
+		StringBuilder result = new StringBuilder();
+		result.append("(or");
+		for(Goal goal : apply.getSubgoals()){
+			result.append(getStringRepresentation(goal));
+		}
+		result.append(")"); 
+		return result.toString();
+	}
+
+	private static String getStringRepresentation(Goal goal) {
+		BoolExpr[] formulas = goal.getFormulas();
+		int size = formulas.length;
+		if(size == 0)
+			return "true";
+		if(size == 1)
+			return formulas[0].getSExpr();
+		StringBuilder result = new StringBuilder();
+		result.append("(and");
+		for(BoolExpr b : formulas){
+			result.append(" " + b.getSExpr());
+		}
+		result.append(")");
+		return result.toString();
+	}
+	
+	@Test
+	public void test() throws Z3Exception {
+		Context z3 = new Context();
+		Expr i = z3.mkIntConst("i");
+		Expr j = z3.mkIntConst("j");
+		BoolExpr c1 = z3.mkGe((ArithExpr) i, z3.mkInt(0));
+		BoolExpr c2 = z3.mkLe((ArithExpr) i, z3.mkInt(0));
+		BoolExpr c3 = z3.mkGe((ArithExpr) j, z3.mkInt(0));
+		BoolExpr c4 = z3.mkNot(z3.mkEq(j, z3.mkInt(0)));
+		BoolExpr guard = z3.mkAnd(c1, c2, c3, c4);
+		
+		Tactic elimAnd = z3.mkTactic("nnf");
+		Tactic propValues = z3.mkTactic("qflia");
+		Tactic propIneq = z3.mkTactic("propagate-ineqs");
+		Tactic simplify = z3.mkTactic("der");
+		Tactic simplifyTactic = z3.then(propIneq, simplify);
+		
+		Goal g = z3.mkGoal(true, false, false);
+		g.add(guard);		
+		ApplyResult apply = simplifyTactic.apply(g);
+<<<<<<< HEAD
+		System.out.println(apply);
+		System.out.println(getStringRepresentation(apply));
+		z3.parseSMTLIB2String("(assert true)\n", null, null, null, null);
+//		BoolExpr[] formulas = apply.getSubgoals()[0].getFormulas();
+//		for(BoolExpr f : formulas)
+//			System.out.println(f);
+//		
+//		StringBuilder result = new StringBuilder();
+//		for(Goal goal : apply.getSubgoals()){
+//			result.append("(and");
+//			for(BoolExpr b : goal.getFormulas()){
+//				result.append(" "+b);
+//			}
+//			result.append(")");
+//		}
+//		System.out.println(result);
+=======
+		System.out.println(SimplifyPrint.getStringRepresentation(apply));
+>>>>>>> 46d76b71986f0536f34edeb85aaf0e107988b587
+	}
+}

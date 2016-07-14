@@ -1,0 +1,1004 @@
+package feedback.utils;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+
+import org.antlr.runtime.ANTLRStringStream;
+import org.antlr.runtime.CharStream;
+import org.antlr.runtime.CommonTokenStream;
+import org.antlr.runtime.RecognitionException;
+import org.antlr.runtime.TokenStream;
+import org.antlr.runtime.tree.CommonTreeNodeStream;
+
+import com.microsoft.z3.BoolExpr;
+import com.microsoft.z3.Context;
+import com.microsoft.z3.FuncDecl;
+import com.microsoft.z3.Model;
+import com.microsoft.z3.Solver;
+import com.microsoft.z3.Status;
+import com.microsoft.z3.Z3Exception;
+
+import feedback.ResultStats;
+import feedback.inputs.InputVar;
+import feedback.inputs.ProgramInputs;
+import feedback.logging.Logger;
+import feedback.update.parser.ExprLexer;
+import feedback.update.parser.ExprParser;
+import feedback.update.parser.ExpressionTreeWalker;
+import feedback.update.parser.UpdateLexer;
+import feedback.update.parser.UpdateParser;
+import feedback.update.parser.UpdateParser.expression_return;
+import feedback.update.parser.UpdateTreeWalker;
+import feedback.update.parser.ExprParser.startrule_return;
+import feedback.update.parser.UpdateParser.prog_return;
+import feedback.utils.Expression.ExprType;
+import feedback.utils.LoopStatement.Direction;
+
+public class HelperFunctions {
+
+	
+    static Context ctx = null;
+    static Solver sol = null;
+    
+    static {
+    	HashMap<String, String> cfg = new HashMap<String, String>();
+    	cfg.put("model", "true");
+ 		try {
+			ctx = new Context(cfg);
+			sol = ctx.mkSolver();
+		} catch (Z3Exception e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+ 		
+    }
+    
+	/*
+	 * Parsing returns a list of Statement 
+	 * Obtain a list of blocks from the former
+	 */
+	public static List<Block> getAsBlocks(List<Statement> sList){
+		List<Block> blocks = new ArrayList<Block>();
+		List<Statement> aList = new ArrayList<Statement>();
+		for(Statement s: sList){
+			if(s instanceof AssignmentStatement){
+				aList.add(((AssignmentStatement) s).unscrunch());
+			}
+			else
+				aList.add(s);
+		}
+		for(int i = 0; i < aList.size(); i++){
+			Statement stmt = aList.get(i);
+			if(stmt instanceof LoopStatement){
+				Block l = new Block((LoopStatement) stmt);
+				blocks.add(l);
+			}
+			else{
+				List<AssignmentStatement> fragment = new ArrayList<AssignmentStatement>();
+				int j;
+				for(j = i; j < aList.size() && aList.get(j) instanceof AssignmentStatement; j++){
+					fragment.add((AssignmentStatement)aList.get(j));
+				}
+				i = j-1;
+				Block l = new Block(fragment);
+				blocks.add(l);
+			}
+		}		
+		return blocks;
+	}
+	
+	public static Map<Expression, Expression> renameMap(Set<Expression> vars, String baseName){
+		Map<Expression, Expression> bindings = new HashMap<Expression, Expression>();
+		int i = 0;
+		for(Expression e: vars){
+			bindings.put(e, new Expression(ExprType.ID, "", baseName+i));
+			i++;
+		}
+		return bindings;
+	}
+
+	public static void identifySuspicious(List<Statement> statements, String progName){
+		Set<String> identifiers = new HashSet<String>();
+		Set<String> indices = new HashSet<String>();
+		
+		for(Statement stmt: statements){
+			if(stmt instanceof LoopStatement){
+				LoopStatement lStmt = (LoopStatement) stmt;
+				indices.add(lStmt.getIndex().toString());
+				while(lStmt.getBlock().get(0) instanceof LoopStatement){
+					lStmt = (LoopStatement) lStmt.getBlock().get(0);
+					indices.add(lStmt.getIndex().toString());
+					
+				}
+				List<Statement> block = lStmt.getBody();
+				for(Statement s : block){
+					AssignmentStatement aStmt = (AssignmentStatement) s;
+					identifiers.addAll(aStmt.getLhs().identifierVisitor());
+					identifiers.addAll(aStmt.getRhs().identifierVisitor());
+					identifiers.addAll(aStmt.getGuard().identifierVisitor());
+				}
+				
+			}
+			else{
+				AssignmentStatement aStmt = (AssignmentStatement) stmt;
+				if(aStmt.getLhs() != null)
+					identifiers.addAll(aStmt.getLhs().identifierVisitor());
+				if(aStmt.getRhs() != null)
+					identifiers.addAll(aStmt.getRhs().identifierVisitor());
+				if(aStmt.getGuard() != null)
+					identifiers.addAll(aStmt.getGuard().identifierVisitor());
+			}
+		}
+		identifiers.removeAll(indices);
+		for(String s: identifiers){
+			if(s.contains("dp_") == false){
+				if(s.compareTo("out") != 0)
+//					System.out.println(progName + " is Suspect because of " + s);
+					System.out.println(progName);
+			}
+		}
+	}
+	
+	public static String getSMTFormula(Map<Expression, String> types){
+		StringBuilder str = new StringBuilder();
+		for (Map.Entry<Expression, String> entry : types.entrySet()) {
+			  Expression key = entry.getKey();
+			  String value = entry.getValue();
+			  if(key.EType == ExprType.ID){
+				  if(value == ""){
+					  value = "Int";
+					  entry.setValue("Int");
+				  }
+				  str.append("(declare-const "+key.printVisitor()+" "+value+")\n");
+			  }
+		}
+//		for (Map.Entry<Expression, String> entry : types.entrySet()) {
+//			  Expression key = entry.getKey();
+//			  String value = entry.getValue();
+//			  if(key.EType == ExprType.ID && value.compareTo("Int") == 0)
+//				  str.append("(assert (>= "+key.printVisitor()+" "+1+"))\n");
+//		}
+		return str.toString();
+	}
+	
+	public static String getSMTStringForStatements(List<Statement> stmts){
+		String formula = "";
+		for (Statement stmt: stmts){
+//        	System.out.println(stmt);
+        	AssignmentStatement rn = ((AssignmentStatement) stmt);
+        	formula += rn.getSMTFormula();
+        }
+		return formula;
+	}
+
+	public static String getSMTStringForStatements(List<Statement> stmts, Expression preCondition){
+		String formula = "";
+		for (Statement stmt: stmts){
+        	AssignmentStatement rn = ((AssignmentStatement) stmt);
+        	Expression guard = rn.getGuard();
+        	if(guard != null)
+        		rn.setGuard(Expression.conjunct(preCondition, guard));
+        	formula += rn.getSMTFormula();
+        }
+		return formula;
+	}
+	
+	
+	public static String getSMTFormula(Expression exp){
+		StringBuilder str = new StringBuilder();
+//		Map<Expression, String> types = new HashMap<Expression, String>();
+//		exp.typeVisitor(types, "");
+//		Map<Expression, Expression> equalityConstr = 
+//				new HashMap<Expression, Expression>();
+//		exp.getTypeConstraints(equalityConstr);
+//		for (Map.Entry<Expression,Expression> entry : equalityConstr.entrySet()) {
+//			  Expression key = entry.getKey();
+//			  Expression value = entry.getValue();
+//			  if(key.EType == ExprType.ID && (!types.containsKey(key) || types.get(key)=="")&& types.containsKey(value))
+//				  types.put(key, types.get(value));
+//			  if(value.EType == ExprType.ID && (!types.containsKey(value) || types.get(value)=="") && types.containsKey(key))
+//				  types.put(value, types.get(key));
+//		}
+//		str.append(getSMTFormula(types));
+		Set<Expression> variables = exp.variableVisitor();
+		if(exp.SMTVisitor().contains("(max "))
+			str.append(VCGen.smtmax);
+		// for now, type everything as integer
+		for(Expression e : variables)
+			str.append("(declare-const "+e.printVisitor()+" "+"Int)\n");
+		str.append("(assert ");
+		str.append(exp.SMTVisitor());
+		str.append(")");
+		return str.toString();
+	}
+	
+	public static <K, V> boolean testIdentity(Map<K,V> m){
+		for (Map.Entry<K,V> entry : m.entrySet()) {
+			  K key = entry.getKey();
+			  V value = entry.getValue();
+			  if(!key.equals(value))
+				  return false;
+		}
+		return true;
+	}
+	
+	public static <V, K> Map<V, K> invert(Map<K, V> map) {
+
+	    Map<V, K> inv = new HashMap<V, K>();
+
+	    for (Entry<K, V> entry : map.entrySet())
+	        inv.put(entry.getValue(), entry.getKey());
+
+	    return inv;
+	}
+	
+	public static Map<Expression, Expression> getNewNames(
+			List<? extends Statement> refStmts, String basename) {
+		Set<Expression> vars = new HashSet<Expression>();
+		for (Statement stmt: refStmts){
+        	//System.out.println(stmt);
+        	vars.addAll(stmt.variableVisitor());
+        	//AssignmentStatement rn = ((AssignmentStatement) stmt).clone();
+        	
+        }
+		//System.out.println(vars);
+		Map<Expression, Expression> bindings = HelperFunctions.renameMap(vars, basename);
+		return bindings;
+	}
+	
+	public static void renameStatements(List<Statement> stmts, 
+			Map<Expression, Expression> bindings){
+		List<Statement> renamed = new ArrayList<Statement>();
+		for (Statement stmt: stmts){
+        	AssignmentStatement rn = ((AssignmentStatement) stmt).clone();
+        	rn.renameVisitor(bindings);
+        	renamed.add(rn);
+		}
+		stmts.clear();
+		stmts.addAll(renamed);
+	}
+	
+	public static void getTypes(List<Statement> stmts, Map<Expression, String> types){
+		List< Set<Expression> > unify = new ArrayList< Set<Expression> >();
+		
+		//Pass 1 : gather constraints
+		for (Statement stmt: stmts){		
+        	AssignmentStatement rn = ((AssignmentStatement) stmt).clone();
+        	rn.populateTypes(types);
+        	boolean flag = false;
+        	for(Set<Expression> constraintSet : unify){
+        		if(constraintSet.contains(rn.getLhs()) || 
+        				constraintSet.contains(rn.getRhs())){
+        			constraintSet.add(rn.getLhs());
+        			constraintSet.add(rn.getRhs());
+        			flag = true;
+        			break;
+        		}
+        	}
+        	if(!flag){
+        		Set<Expression> constr = new HashSet<Expression>();
+        		constr.add(rn.getLhs());
+        		constr.add(rn.getRhs());
+        		unify.add(constr);
+        	}
+		}
+		
+		// Pass 2: unify
+		for(Set<Expression> constraintSet : unify){
+			String representative = "";
+    		for(Expression e : constraintSet){
+    			if(types.containsKey(e) && types.get(e) != ""){
+    				representative = types.get(e);
+    				break;
+    			}
+    		}
+    		for(Expression e : constraintSet){
+    			if(!types.containsKey(e) || types.get(e) == ""){
+    				types.put(e, representative);
+    			}
+    		}
+    	}
+		
+	}
+	
+	// Cycles like i -> j, j -> i in the bindings map are ok
+	// we won't end up with all i's in stmts being renamed to j
+	// and then all the renamed j's together with the original j's
+	// being renamed to i. The invariant of Expression.renameIdentifiers
+	// is that a leaf node in the expression tree (i.e ExprType.ID) is never
+	// revisited - so that it is renamed exactly once
+	public static void renameIdentifiers(List<Statement> stmts, 
+			Map<String, String> bindings){
+		
+		List<Statement> renamed = new ArrayList<Statement>();
+		for (Statement stmt: stmts){
+        	AssignmentStatement rn = ((AssignmentStatement) stmt).clone();
+        	rn.renameIdentifiers(bindings);
+        	renamed.add(rn);
+		}
+		stmts.clear();
+		stmts.addAll(renamed);
+	}
+	
+	public static Expression getConjunctionOfGuards(List<? extends Statement> stmts){
+		Expression conjunct = null;
+		for(Statement s: stmts){
+			if(s instanceof AssignmentStatement){
+				if(((AssignmentStatement) s).getGuard()!=null)
+					conjunct = Expression.conjunct(conjunct, ((AssignmentStatement) s).getGuard());
+			}
+		}
+		return conjunct;
+	}
+	
+	public static List<Expression> getPairwiseConjunctionOfGuards(List<? extends Statement> stmts){
+		List<Expression> pairwiseConjunctionOfGuards = new ArrayList<Expression>();
+		int size = stmts.size();
+		for(int i = 0; i < size; i++){
+			Statement first = stmts.get(i);
+			Expression g1 = Expression.getFalse();
+			if(first instanceof AssignmentStatement)
+				if(((AssignmentStatement) first).getGuard()!=null)
+					g1 = ((AssignmentStatement) first).getGuard();
+			for(int j = i+1; j < size; j++){
+				Statement second = stmts.get(j);
+				Expression conjunct = null;
+				if(second instanceof AssignmentStatement){
+					if(((AssignmentStatement) second).getGuard()!=null){
+						conjunct = Expression.conjunct(g1, ((AssignmentStatement) second).getGuard());
+						pairwiseConjunctionOfGuards.add((Expression) conjunct.clone());
+					}
+				}
+			}
+			
+		}
+		return pairwiseConjunctionOfGuards;
+	}
+	
+	public static Expression getDisjunctionOfGuards(List<? extends Statement> stmts){
+		Expression disjunct = null; // new Expression(ExprType.CONST, "", "false");
+		for(Statement s: stmts){
+			if(s instanceof AssignmentStatement){
+				if(((AssignmentStatement) s).getGuard()!=null)
+					disjunct = Expression.disjunct(disjunct, ((AssignmentStatement) s).getGuard());
+			}
+		}
+		return disjunct;
+	}
+	
+	public static Expression getConjunctionOfNegatedGuards(List<? extends Statement> stmts){
+		Expression conjunct = null; // new Expression(ExprType.CONST, "", "true");
+		for(Statement s: stmts){
+			if(s instanceof AssignmentStatement){
+				if(((AssignmentStatement) s).getGuard()!=null)
+					conjunct = Expression.conjunct(conjunct, Expression.negate(((AssignmentStatement) s).getGuard()));
+			}
+		}
+		return conjunct;
+	}
+	
+	public static Expression getLhs(Statement stmt){
+		if(stmt instanceof AssignmentStatement)
+			return ((AssignmentStatement) stmt).getLhs();
+		else return getLhs(((LoopStatement) stmt).getBlock().get(0));
+	}
+	
+	public static Expression assertSameLHS(List<Statement> stmts){
+		Expression lhsLastSeen = null;
+		for(Statement s: stmts){
+			if(s instanceof AssignmentStatement){
+				if(lhsLastSeen == null)
+					lhsLastSeen = ((AssignmentStatement) s).getLhs();
+				else{
+					Expression curr = ((AssignmentStatement) s).getLhs();
+					assert(lhsLastSeen.equalsVisitor(curr));
+					lhsLastSeen = curr;
+				}
+			}
+		}
+		return lhsLastSeen;
+	}
+	
+	public static Set<Expression> getAllLHS(List<Statement> stmts){
+		Set<Expression> exprs = new HashSet<Expression>();
+		for(Statement s: stmts){
+			if(s instanceof AssignmentStatement)
+					exprs.add(((AssignmentStatement) s).getLhs());
+				
+		}
+		return exprs;
+	}
+	
+	// tell if the formula an expression represents is satisfiable
+		// the expression must involve only ids, ints, bools
+		// no array accesses! so rename to uninterpreted functions
+		// before calling this method
+	public static boolean checkSAT(Expression exp){
+		try {
+			String formula = getSMTFormula(exp);
+			if(!tryParse(formula)){
+				System.out.println(exp);
+				throw new RuntimeException("Failed to parse" + formula);
+			}			
+			BoolExpr prop = ctx.parseSMTLIB2String(formula, null, null, null, null);
+			Status stat = testZ3Expression(prop);
+		    if (stat == Status.UNSATISFIABLE)
+		    	return false;
+		} catch (Z3Exception e) {
+				e.printStackTrace();
+		} 
+		return true;
+	}
+
+	private static Status testZ3Expression(BoolExpr prop) throws Z3Exception {
+		assert sol.getNumAssertions() == 0 && sol.getNumScopes() == 0:
+			"We're using a stale solver";
+		sol.push();
+		sol.add(prop);
+		Status stat = sol.check();
+		sol.pop();
+		return stat;
+	}
+
+	// Returns false if formula unsatisfiable
+	public static boolean checkSAT(String formula){
+		//assert(exp.getType().compareTo("Bool") == 0);
+		try {
+			if(!tryParse(formula)){
+				throw new RuntimeException("Failed to parse" + formula);
+			}
+			BoolExpr prop = ctx.parseSMTLIB2String(formula, null, null, null, null);
+			Status stat = testZ3Expression(prop);
+		    if (stat == Status.UNSATISFIABLE){
+		    	return false;
+		    }
+		    if(stat == Status.UNKNOWN){
+		    	throw new RuntimeException();
+		    }
+		} catch (Z3Exception e) {
+			e.printStackTrace();
+		} 
+		return true;
+	}	
+	
+	public static Map<Expression, Expression> getNewNames(
+				List<Statement> refStmts, String basename, Set<Expression> iVars) {
+			Set<Expression> vars = new HashSet<Expression>();
+			vars.addAll(iVars);
+			for (Statement stmt: refStmts){
+	        	vars.addAll(stmt.variableVisitor());
+	        }
+			Map<Expression, Expression> bindings = HelperFunctions.renameMap(vars, basename);
+			return bindings;
+		}
+
+		public static void identifySuspiciousInit(List<Statement> statements,
+				String progName) {
+			Set<String> identifiers = new HashSet<String>();
+
+			for(Statement stmt: statements){
+				if(stmt instanceof LoopStatement){
+					LoopStatement lStmt = (LoopStatement) stmt;
+					while(lStmt.getBlock().get(0) instanceof LoopStatement){
+						lStmt = (LoopStatement) lStmt.getBlock().get(0);			
+					}
+					List<Statement> block = lStmt.getBody();
+					for(Statement s : block){
+						AssignmentStatement aStmt = (AssignmentStatement) s;
+						identifiers.addAll(aStmt.getRhs().identifierVisitor());
+						identifiers.addAll(aStmt.getGuard().identifierVisitor());
+					}
+					
+				}
+				else{
+					AssignmentStatement aStmt = (AssignmentStatement) stmt;
+					identifiers.addAll(aStmt.getRhs().identifierVisitor());
+					identifiers.addAll(aStmt.getGuard().identifierVisitor());
+				}
+			}
+		
+			for(String s: identifiers){
+				if(s.contains("dp_Array_") == true){
+						//System.out.println(progName + " is Suspect because of dp_Array in guard/lhs of init " + s);
+						System.out.println(progName);
+				}
+			}
+		}
+
+		public static String rewriteRepair(String input, Map<String, Variable> submissionProgramVariables){
+			String rewritten = input;
+			for (Entry<String, Variable> entry : submissionProgramVariables.entrySet()){
+				rewritten = rewritten.replace(entry.getKey(), entry.getValue().getRealName());
+			}
+			return rewritten;
+		}
+		
+		public static void renameIndices(LoopStatement header,
+				Map<String, String> localRename) {
+			header.getIndex().renameIdentifiers(localRename);
+			header.getUpperBound().renameIdentifiers(localRename);
+			header.getLowerBound().renameIdentifiers(localRename);
+			while(header.getBlock().get(0) instanceof LoopStatement){
+				header = (LoopStatement) header.getBlock().get(0);	
+				header.getIndex().renameIdentifiers(localRename);
+				header.getUpperBound().renameIdentifiers(localRename);
+				header.getLowerBound().renameIdentifiers(localRename);
+			}
+		}
+				
+		public static void renameIndices(List<LoopStatement> header,
+				Map<String, String> localRename) {
+			if(header == null)
+				return; 
+			for(LoopStatement h : header){
+				h.getIndex().renameIdentifiers(localRename);
+				h.getUpperBound().renameIdentifiers(localRename);
+				h.getLowerBound().renameIdentifiers(localRename);
+			}
+		}
+		
+		private static ResultStats handleDegenerate(List<Block> ref, List<Block> sub,  
+				Logger feedbackLogger, 
+				Map<String, Variable> referenceProgramVariables, 
+				Map<String, Variable> submissionProgramVariables){
+			int score = 0;
+			ResultStats rStats = null;
+			if(ref.size() == 0 && sub.size() == 0){
+//				feedbackLogger.writeLog("Empty blocks!");
+				rStats = new ResultStats(true, score);
+			}
+			
+			else if(ref.size() == 0 && sub.size() != 0){
+				score += sub.size();
+//				feedbackLogger.writeLog("Spurious block!");
+				rStats = new ResultStats(true, score);
+			}
+			
+			else if(ref.size() != 0 && sub.size() == 0){
+				score += ref.size();
+//				feedbackLogger.writeLog("Missing block!");
+				rStats = new ResultStats(true, score);
+			}
+			
+			else if(sub.size() != ref.size()){
+				String failure = "Mismatched number of blocks";
+//				feedbackLogger.writeLog(failure);
+				score += 20;
+				feedbackLogger.writeLog("Structural Difference.\n");
+				feedbackLogger.writeLog("Use the following solution:\n");
+				String feedbackString = rewriteUsingSubmissionProgramVariables(
+						ref, feedbackLogger, referenceProgramVariables,
+						submissionProgramVariables);
+				feedbackLogger.writeLog(feedbackString);
+				rStats = new ResultStats(true, 0, 0, failure, score);				
+			}
+			
+			return rStats;
+		}
+
+		public static String rewriteUsingSubmissionProgramVariables(
+				List<Block> ref, Logger feedbackLogger,
+				Map<String, Variable> referenceProgramVariables,
+				Map<String, Variable> submissionProgramVariables) {
+			StringBuilder feedbackStringBuilder = new StringBuilder();
+			for(Block b : ref){					
+				String s = rewrite(b.toStringFeedback(feedbackLogger.isOutputMode()), 
+						b.SATVarToSummaryVar);
+				feedbackStringBuilder.append(s);
+			}
+			String feedbackString = feedbackStringBuilder.toString();
+			
+			for (Entry<String, Variable> entry : referenceProgramVariables.entrySet()){
+				if(submissionProgramVariables.get(entry.getKey()) != null)
+				feedbackString = feedbackString.replace(entry.getKey(), 
+						submissionProgramVariables.get(entry.getKey()).realName);
+			}
+			return feedbackString;
+		}
+		
+		
+
+		private static String rewrite(String stringFeedback,
+				Map<Expression, Expression> SATVarToSummaryVar) {
+			String rewritten = stringFeedback;
+			for (Entry<Expression, Expression> entry : SATVarToSummaryVar.entrySet()){
+				String SATVarName = entry.getKey().getName();
+				rewritten = rewritten.replace(SATVarName, entry.getValue().toString());
+			}
+			return rewritten;
+		}
+
+		public static ResultStats matchBlocks(List<Block> ref, List<Block> sub,  
+				Logger feedbackLogger, Expression inputConstraint, String refName,
+				String progName, String subName, Map<String, Variable> referenceProgramVariables, Map<String, Variable> submissionProgramVariables){
+			int score = 0;
+			
+			// Handle degenerate cases. 
+			ResultStats rStats = handleDegenerate(ref, sub, feedbackLogger, 
+					referenceProgramVariables, 
+					submissionProgramVariables);
+			
+			if(rStats != null)
+				return rStats;
+			
+			rStats = new ResultStats(true, 0);
+			
+			// if an entry at index i is false, it means the i'th fragment matched
+			List<ResultStats> rStatList = new ArrayList<ResultStats>();	
+			List<Boolean> cMatch = new ArrayList<Boolean>();
+			
+			for(int i = 0; i < sub.size(); i++){
+				Block refBlock = ref.get(i);
+				Block subBlock = sub.get(i);
+//				feedbackLogger.writeLog("Matching block " + i);
+				VCGen checker = new VCGen(refBlock, subBlock, inputConstraint, feedbackLogger, referenceProgramVariables, submissionProgramVariables);
+				if(!checker.checkDepthAndDirection()){
+					score += 3;
+					rStats.numSpurious++;
+//					feedbackLogger.writeLog("Mismatched depth/direction. Ref:\n");
+//					feedbackLogger.writeLog(refBlock.toString());
+//					continue;
+					String failure = HelperFunctions.rewriteUsingSubmissionProgramVariables(ref, feedbackLogger, referenceProgramVariables, submissionProgramVariables);
+					failure = "Structural Difference \nUse reference summary instead\n" + failure;
+					feedbackLogger.writeLog(failure);
+					ResultStats failed = new ResultStats(true, 0, 0, failure, 0);
+					return failed;
+				}
+				checker.prepare();
+				if(!checker.checkSameLHSUpdated()){
+					score += 3;
+					rStats.numSpurious++;
+//					feedbackLogger.writeLog("Ref updates different LHS. Ref:\n");
+//					feedbackLogger.writeLog(refBlock.toString());
+					feedbackLogger.writeLog("Cannot generate feedback!");
+//					continue;
+					ResultStats failed = new ResultStats(false, 0, 0, "Different LHS", 0);
+					return failed;
+				}
+				Status missingOrSpurious = null;
+				try {
+					missingOrSpurious = checker.testMissingOrSpurious();
+				 	rStats = checker.testEquivalence();
+				}
+				catch (Z3Exception e) {
+					e.printStackTrace();
+				}
+
+				// If at any point we fail, we quit early
+				if(missingOrSpurious == Status.UNKNOWN || !rStats.succeeded){
+					return rStats;
+				}
+				
+				if(missingOrSpurious == Status.SATISFIABLE){
+					rStats.score++;
+					rStats.numSpurious++;
+				}
+				
+				score += rStats.score;
+				
+				rStatList.add(rStats);
+				cMatch.add(missingOrSpurious == Status.SATISFIABLE);
+//				if(rStats.succeeded)
+//					feedbackLogger.writeLog("Block " + i + " Matched");
+//				else
+//					feedbackLogger.writeLog("Block " + i + " Mismatch");
+			}
+			
+			boolean conditional = false;
+			
+			for(int i = 0; i < cMatch.size(); i++){
+				if(cMatch.get(i)){
+					conditional = true;
+					break;
+				}	
+			}
+			rStats = collapseAsSingle(rStatList, score);
+			if(rStatList.size() > 0){
+				System.out.print(subName + "["+progName+"]" + " Matched " + refName);
+//				feedbackLogger.writeLog(subName + " Matched " + refName);
+//				feedbackLogger.writeLog("Success");
+				if(conditional)
+					System.out.println(" Conditionally");
+				else
+					System.out.println();
+//				feedbackLogger.writeLog(Integer.toString(score));	
+				return rStats;
+			}
+					
+			return new ResultStats(false, 0, 0, "No block matched", score+20);
+		}
+		
+		private static ResultStats collapseAsSingle(List<ResultStats> rStatList, int scor) {
+			if(rStatList == null)
+				return null;
+			int score = 0, numInit = 0, numReplace = 0, originalSize = 0, 
+					newSize = 0, numSpurious = 0;
+			for(ResultStats rs : rStatList){
+				score += rs.score;
+				numInit += rs.numInserts;
+				numReplace += rs.numReplace;
+				numSpurious += rs.numSpurious;
+				originalSize += rs.sizeBeforeOpt;
+				newSize += rs.sizeAfterOpt;
+			}
+			return new ResultStats(true, numInit, numReplace, numSpurious, "", Math.max(score, scor), 
+					originalSize, newSize);
+		}
+
+		public static boolean lessThanOrEquals(Expression e1, Expression e2, Expression pre){
+			StringBuilder formula = getPreFormula(e1, e2, pre);
+			// e1 <= e2 is true if e1 > e2 is UNSAT
+			formula.append("(assert (> " + e1.SMTVisitor() + " " + e2.SMTVisitor() + "))\n"); 
+			// checkSAT returns false if the formula is UNSAT, so negate
+			return !checkSAT(formula.toString());
+		}
+		
+		public static boolean lessThan(Expression e1, Expression e2, Expression pre){
+			StringBuilder formula = getPreFormula(e1, e2, pre);
+			// e1 < e2 is true if e1 >= e2 is UNSAT
+			formula.append("(assert (>= " + e1.SMTVisitor() + " " + e2.SMTVisitor() + "))\n");
+			return !checkSAT(formula.toString());
+		}
+
+		private static StringBuilder getPreFormula(Expression e1,
+				Expression e2, Expression constraint) {
+			StringBuilder formula = new StringBuilder();
+			
+			Set<Expression> variables = e1.variableVisitor();
+			variables.addAll(e2.variableVisitor());
+			variables.addAll(constraint.variableVisitor());
+			for(Expression e : variables)
+				formula.append("(declare-const "+e.printVisitor()+" "+"Int)\n");
+
+			formula.append("(assert " + constraint.SMTVisitor() + ")\n");
+			return formula;
+		}
+		
+		public static int evaluateExpression(Map<String, String> valuation, Expression expr){
+			String exp = expr.printVisitor();
+			return evaluateExpression(valuation, exp);
+		}
+
+		public static int evaluateExpression(Map<String, String> valuation,
+				String exp) {
+			CharStream strm = new ANTLRStringStream(exp);
+			ExprLexer lex = new ExprLexer(strm);
+			TokenStream tokenStrm = new CommonTokenStream(lex);
+			ExprParser pars = new ExprParser(tokenStrm);
+			startrule_return expression = null;
+			try {
+				expression = pars.startrule();
+			} catch (RecognitionException e) {
+				e.printStackTrace();
+			}
+//			System.out.println(expression.getTree().toStringTree());
+			CommonTreeNodeStream nStream = new CommonTreeNodeStream(expression.getTree());
+			ExpressionTreeWalker expWalker = new ExpressionTreeWalker(nStream);
+			expWalker.variables.putAll(valuation);
+			int value = 0;
+			try {
+				value = expWalker.eval();
+			} catch (RecognitionException e) {
+				System.out.println(exp);
+				System.out.println(valuation);
+				e.printStackTrace();
+			}
+			return value;
+		}
+		
+		public static Expression parseAsExpression(String str){
+			 String exprStr = str + ";";
+			 CharStream stream = new ANTLRStringStream(exprStr);
+		     UpdateLexer lexer = new UpdateLexer(stream);
+		     TokenStream tokenStream = new CommonTokenStream(lexer);
+		     UpdateParser parser = new UpdateParser(tokenStream);
+		     expression_return primary = null;
+			try {
+				primary = parser.expression();
+			} catch (RecognitionException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+//		     System.out.println(primary.getTree().toStringTree());
+		     CommonTreeNodeStream nodeStream = new CommonTreeNodeStream(primary.getTree());
+		     UpdateTreeWalker walker = new UpdateTreeWalker(nodeStream);
+		     Expression exp = null;
+		     try {
+				exp = walker.expression();
+			} catch (RecognitionException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		    return exp; 
+		}
+		
+		public static AssignmentStatement simplify(LoopStatement lStmt){
+			// We will only attempt to rewrite depth 2 loops with 
+			// one inner assignment statement
+			if(lStmt.depth != 2)
+				return null;
+			if(lStmt.getBody().size() != 1){
+				return null;
+			}
+			Expression iterSpace = getIterSpace(lStmt.headers);
+			AssignmentStatement first = (AssignmentStatement) lStmt.getBody().get(0);
+			Expression formula = Expression.conjunct(iterSpace, first.getGuard());
+			Map<Expression, Expression> vals = hasSingleValuation(formula);
+			if(vals != null){
+				first.setGuard(Expression.getTrue());
+				for(Map.Entry<Expression, Expression> entry : vals.entrySet()){
+					Expression source = entry.getKey();
+					Expression target = entry.getValue();
+					first.getLhs().replace(source, target);
+					first.getRhs().replace(source, target);
+				}
+				return first;
+			}
+			return null;
+		}
+		
+		private static Map<Expression, Expression> hasSingleValuation(
+				Expression formula) {
+			StringBuilder str = new StringBuilder();
+			
+			Set<Expression> variables = formula.variableVisitor();
+			for(Expression e : variables)
+				str.append("(declare-const "+e.printVisitor()+" "+"Int)\n");
+			
+			for(Expression v : variables){
+				InputVar inputDetails = ProgramInputs.getInputDetails(v.getName());
+				if( inputDetails != null)
+					str.append("(assert (= " + v.getName() + " " +  inputDetails.upperBound + "))\n");
+			}
+			
+
+			str.append("(assert " + formula.SMTVisitor() + ")\n");
+//			System.out.println(str);
+		    
+		    Map<Expression, Expression> valuation = new HashMap<Expression, Expression>();
+		    if(!tryParse(str.toString()))
+		    	return null;
+			try {
+				BoolExpr prop = ctx.parseSMTLIB2String(str.toString(), null, null, null, null);
+				sol.push();
+			    sol.add(prop);
+			    int solutionCount = 0;
+			    Model m = null;
+			    
+			    while(sol.check() == Status.SATISFIABLE){
+			    	valuation.clear();
+			    	solutionCount++;
+			    	m = sol.getModel();
+			    	if(solutionCount > 1){
+//			    		System.out.println(m);
+			    		sol.pop();
+			    		return null;
+			    	}
+			    	
+			    	BoolExpr constr = ctx.mkFalse();
+			    	for(FuncDecl f : m.getDecls()){
+			    		constr = ctx.mkOr(constr, ctx.mkNot(ctx.mkEq(ctx.mkIntConst(f.getName()), m.getConstInterp(f))));			    		
+			    		valuation.put(new Expression(ExprType.ID, "", f.getName().toString()), 
+			    				new Expression(ExprType.CONST, "", m.getConstInterp(f).toString()));
+			    	}
+//			    	sol.pop();
+//			    	sol.push();
+			    	sol.add(constr);
+//			    	for(BoolExpr bexpr : sol.getAssertions())
+//			    		System.out.println(bexpr);
+			    }
+			    sol.pop();
+			} catch (Z3Exception e) {
+					e.printStackTrace();
+			} 
+			return valuation;
+		}
+
+		public static Expression getIterSpace(List<LoopStatement> header){
+			if(header == null)
+				return null;
+			Expression conjunct = null;
+			for(LoopStatement s: header){
+				Expression lb = (Expression) s.getLowerBound().clone();
+				Expression ub = (Expression) s.getUpperBound().clone();
+//				lb.renameVisitor(summaryVarToSATVar);
+//				ub.renameVisitor(summaryVarToSATVar);
+				
+				Expression index = (Expression) s.getIndex().clone();
+//				index.renameVisitor(summaryVarToSATVar);
+				Expression e1, e2;
+				if(s.dir == Direction.UP){
+					e1 = new Expression(ExprType.BINARY, ">=", index, lb, "");
+					e2 = new Expression(ExprType.BINARY, "<=", index, ub, "");
+				}
+				else{
+					e1 = new Expression(ExprType.BINARY, "<=", index, lb, "");
+					e2 = new Expression(ExprType.BINARY, ">=", index, ub, "");
+				}
+				conjunct = Expression.conjunct(conjunct, e1);
+				conjunct = Expression.conjunct(conjunct, e2);
+			}
+			return conjunct;
+		
+		}
+		
+		static boolean tryParse(String formulaString){
+			Context parseContext = null;
+			BoolExpr prop = null;
+			boolean success = true;
+			try {
+				parseContext = new Context();
+				prop = parseContext.parseSMTLIB2String(formulaString, null, null, null, null);
+				prop.dispose();
+				parseContext.dispose();
+			} catch (Z3Exception e1) {
+				System.out.println(formulaString);
+				e1.printStackTrace();
+				success = false;
+			} finally {
+				parseContext.dispose();
+			}
+			return success;
+		}
+		
+		public static String removeExtension(String filename) {
+		    if (filename == null) {
+		        return null;
+		    }
+
+		    int index = indexOfExtension(filename);
+
+		    if (index == -1) {
+		        return filename;
+		    } else {
+		        return filename.substring(0, index);
+		    }
+		}
+
+		/**
+		 * Return the file extension from a filename, including the "."
+		 * 
+		 * e.g. /path/to/myfile.jpg -> .jpg
+		 */
+		public static String getExtension(String filename) {
+		    if (filename == null) {
+		        return null;
+		    }
+
+		    int index = indexOfExtension(filename);
+
+		    if (index == -1) {
+		        return filename;
+		    } else {
+		        return filename.substring(index);
+		    }
+		}
+
+		private static final char EXTENSION_SEPARATOR = '.';
+		private static final char DIRECTORY_SEPARATOR = '/';
+
+		public static int indexOfExtension(String filename) {
+
+		    if (filename == null) {
+		        return -1;
+		    }
+
+		    // Check that no directory separator appears after the 
+		    // EXTENSION_SEPARATOR
+		    int extensionPos = filename.lastIndexOf(EXTENSION_SEPARATOR);
+
+		    int lastDirSeparator = filename.lastIndexOf(DIRECTORY_SEPARATOR);
+
+		    if (lastDirSeparator > extensionPos) {		       
+		        return -1;
+		    }
+
+		    return extensionPos;
+		}
+		
+}
