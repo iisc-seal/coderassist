@@ -1,0 +1,3 @@
+Assumptions:
+*Functions in the program needs to have a definition before main(). Otherwise
+callgraph does not include these functions.
